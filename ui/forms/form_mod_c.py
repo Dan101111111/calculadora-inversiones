@@ -1,29 +1,280 @@
 from utils.utils import convertir_tea_a_periodica, formato_moneda, mostrar_ayuda
-import pandas as pd 
+from ui.results.res_mod_c import (
+    mostrar_resultados_completos,
+    comparacion_escenarios,
+    grafico_sensibilidad
+)
+import pandas as pd
 import streamlit as st
-import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import io
+
+
+def generar_pdf_bonos(valor_nominal, tasa_cupon, frecuencia_bono, plazo_bono,
+                      tea_bono, df_flujos, valor_presente_total, cupon,
+                      tasa_cupon_periodica, tasa_descuento_periodica):
+    """Genera un PDF profesional con el reporte de valoración del bono"""
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5 * inch, bottomMargin=0.5 * inch)
+    story = []
+    styles = getSampleStyleSheet()
+
+    # Estilos personalizados
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        textColor=colors.HexColor('#1e40af'),
+        spaceAfter=30,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold'
+    )
+
+    subtitle_style = ParagraphStyle(
+        'CustomSubtitle',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=colors.HexColor('#3b82f6'),
+        spaceAfter=12,
+        spaceBefore=20,
+        fontName='Helvetica-Bold'
+    )
+
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=11,
+        spaceAfter=8
+    )
+
+    # Título principal
+    story.append(Paragraph("REPORTE DE VALORACIÓN DE BONOS", title_style))
+    story.append(Paragraph(f"Fecha de emisión: {datetime.now().strftime('%d/%m/%Y %H:%M')}", normal_style))
+    story.append(Spacer(1, 0.3 * inch))
+
+    # Sección 1: Parámetros del Bono
+    story.append(Paragraph("1. PARÁMETROS DEL BONO", subtitle_style))
+
+    parametros_data = [
+        ['Parámetro', 'Valor'],
+        ['Valor Nominal', formato_moneda(valor_nominal)],
+        ['Tasa Cupón (TEA)', f"{tasa_cupon}%"],
+        ['Tasa Cupón Periódica', f"{tasa_cupon_periodica * 100:.4f}%"],
+        ['Frecuencia de Pago', frecuencia_bono],
+        ['Plazo', f"{plazo_bono} años"],
+        ['Tasa de Descuento (TEA)', f"{tea_bono}%"],
+        ['Tasa de Descuento Periódica', f"{tasa_descuento_periodica * 100:.4f}%"],
+        ['Cupón por Período', formato_moneda(cupon)]
+    ]
+
+    tabla_parametros = Table(parametros_data, colWidths=[3 * inch, 2 * inch])
+    tabla_parametros.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+    ]))
+
+    story.append(tabla_parametros)
+    story.append(Spacer(1, 0.3 * inch))
+
+    # Sección 2: Resumen de Valoración
+    story.append(Paragraph("2. RESUMEN DE VALORACIÓN", subtitle_style))
+
+    periodos_bono = {
+        'Mensual': 12, 'Bimestral': 6, 'Trimestral': 4,
+        'Cuatrimestral': 3, 'Semestral': 2, 'Anual': 1
+    }
+    total_periodos = plazo_bono * periodos_bono[frecuencia_bono]
+    total_flujos = df_flujos['Flujo'].sum()
+    diferencia = valor_presente_total - valor_nominal
+
+    if diferencia > 0:
+        tipo_bono = "Premium (Sobre Par)"
+        interpretacion = f"El bono cotiza con prima. Su valor presente es {formato_moneda(diferencia)} mayor que el valor nominal."
+    elif diferencia < 0:
+        tipo_bono = "Descuento (Bajo Par)"
+        interpretacion = f"El bono cotiza con descuento. Su valor presente es {formato_moneda(abs(diferencia))} menor que el valor nominal."
+    else:
+        tipo_bono = "A la Par"
+        interpretacion = "El bono cotiza a la par. Su valor presente es igual al valor nominal."
+
+    resumen_data = [
+        ['Métrica', 'Valor'],
+        ['Número Total de Períodos', str(total_periodos)],
+        ['Total de Flujos de Caja', formato_moneda(total_flujos)],
+        ['Valor Presente del Bono', formato_moneda(valor_presente_total)],
+        ['Valor Nominal', formato_moneda(valor_nominal)],
+        ['Diferencia (VP - VN)', formato_moneda(diferencia)],
+        ['Tipo de Bono', tipo_bono]
+    ]
+
+    tabla_resumen = Table(resumen_data, colWidths=[3 * inch, 2 * inch])
+    tabla_resumen.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+    ]))
+
+    story.append(tabla_resumen)
+    story.append(Spacer(1, 0.2 * inch))
+
+    # Interpretación
+    interpretacion_para = Paragraph(f"<b>Interpretación:</b> {interpretacion}", normal_style)
+    story.append(interpretacion_para)
+    story.append(Spacer(1, 0.3 * inch))
+
+    # Sección 3: Detalle de Flujos
+    story.append(Paragraph("3. DETALLE DE FLUJOS DE CAJA", subtitle_style))
+
+    flujos_data = [['Período', 'Año', 'Flujo de Caja', 'Valor Presente']]
+
+    for _, row in df_flujos.head(20).iterrows():
+        flujos_data.append([
+            str(int(row['Periodo'])),
+            f"{row['Año']:.2f}",
+            formato_moneda(row['Flujo']),
+            formato_moneda(row['Valor Presente'])
+        ])
+
+    if len(df_flujos) > 20:
+        flujos_data.append(['...', '...', '...', '...'])
+
+    tabla_flujos = Table(flujos_data, colWidths=[1 * inch, 1 * inch, 1.5 * inch, 1.5 * inch])
+    tabla_flujos.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f59e0b')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+    ]))
+
+    story.append(tabla_flujos)
+
+    if len(df_flujos) > 20:
+        nota = Paragraph(f"<i>Nota: Se muestran los primeros 20 períodos de {len(df_flujos)} totales.</i>",
+                         normal_style)
+        story.append(Spacer(1, 0.1 * inch))
+        story.append(nota)
+
+    # Pie de página
+    story.append(Spacer(1, 0.5 * inch))
+    footer = Paragraph(
+        "Este reporte ha sido generado automáticamente por el Sistema de Valoración de Bonos<br/>"
+        "© 2025 - Calculadora de Inversiones Financieras",
+        ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.grey, alignment=TA_CENTER)
+    )
+    story.append(footer)
+
+    # Construir PDF
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def calcular_valoracion_bono(valor_nominal, tasa_cupon, frecuencia_bono, plazo_bono, tea_bono):
+    """Función para calcular la valoración del bono"""
+    periodos_bono = {
+        'Mensual': 12, 'Bimestral': 6, 'Trimestral': 4,
+        'Cuatrimestral': 3, 'Semestral': 2, 'Anual': 1
+    }
+
+    num_periodos_bono = periodos_bono[frecuencia_bono]
+    total_periodos_bono = plazo_bono * num_periodos_bono
+
+    tasa_cupon_periodica = convertir_tea_a_periodica(tasa_cupon, frecuencia_bono)
+    tasa_descuento_periodica = convertir_tea_a_periodica(tea_bono, frecuencia_bono)
+
+    cupon = valor_nominal * tasa_cupon_periodica
+
+    # Calcular flujos y valor presente
+    flujos = []
+    valor_presente_total = 0
+
+    for i in range(1, total_periodos_bono + 1):
+        if i == total_periodos_bono:
+            flujo = cupon + valor_nominal
+        else:
+            flujo = cupon
+
+        vp = flujo / ((1 + tasa_descuento_periodica) ** i)
+        valor_presente_total += vp
+
+        flujos.append({
+            'Periodo': i,
+            'Año': round(i / num_periodos_bono, 2),
+            'Flujo': flujo,
+            'Valor Presente': vp
+        })
+
+    df_flujos = pd.DataFrame(flujos)
+
+    return {
+        'df_flujos': df_flujos,
+        'valor_presente_total': valor_presente_total,
+        'cupon': cupon,
+        'tasa_cupon_periodica': tasa_cupon_periodica,
+        'tasa_descuento_periodica': tasa_descuento_periodica,
+        'num_periodos_bono': num_periodos_bono,
+        'total_periodos_bono': total_periodos_bono
+    }
+
+
 def show_mod_c_form():
     st.header("📊 Módulo C: Valoración de Bonos")
     st.markdown("Calcula el valor presente de un bono según sus características.")
-    
+
+    # Botón de ayuda
+    col_help1, col_help2 = st.columns([6, 1])
+    with col_help2:
+        if st.button("❓ Ayuda", key="help_bonos"):
+            mostrar_ayuda()
+
+    # SECCIÓN 1: INPUTS (Formulario)
     with st.expander("⚙️ Parámetros del Bono", expanded=True):
         col1, col2, col3 = st.columns(3)
-        
+
         with col1:
             valor_nominal = st.number_input(
                 "Valor Nominal (USD)",
                 min_value=100.0, value=1000.0, step=100.0,
                 help="Valor que recibirás al vencimiento del bono"
             )
-            
+
             tasa_cupon = st.number_input(
                 "Tasa Cupón (% TEA)",
                 min_value=0.0, max_value=50.0, value=6.0, step=0.1,
                 help="Tasa de interés que paga el bono anualmente"
             )
-        
+
         with col2:
             frecuencia_bono = st.selectbox(
                 "Frecuencia de Pago",
@@ -31,146 +282,148 @@ def show_mod_c_form():
                 index=4,
                 help="Cada cuánto tiempo recibirás los cupones"
             )
-            
+
             plazo_bono = st.number_input(
                 "Plazo (Años)",
                 min_value=1, max_value=50, value=5, step=1,
                 help="Años hasta el vencimiento del bono"
             )
-        
+
         with col3:
             tea_bono = st.number_input(
                 "Tasa de Retorno Esperada (% TEA)",
                 min_value=0.0, max_value=50.0, value=7.0, step=0.1,
                 help="Tasa de descuento para calcular el valor presente"
             )
-    
-    # Cálculos del bono
-    periodos_bono = {
-        'Mensual': 12, 'Bimestral': 6, 'Trimestral': 4,
-        'Cuatrimestral': 3, 'Semestral': 2, 'Anual': 1
-    }
-    
-    num_periodos_bono = periodos_bono[frecuencia_bono]
-    total_periodos_bono = plazo_bono * num_periodos_bono
-    
-    tasa_cupon_periodica = convertir_tea_a_periodica(tasa_cupon, frecuencia_bono)
-    tasa_descuento_periodica = convertir_tea_a_periodica(tea_bono, frecuencia_bono)
-    
-    cupon = valor_nominal * tasa_cupon_periodica
-    
-    # Calcular flujos y valor presente
-    flujos = []
-    valor_presente_total = 0
-    
-    for i in range(1, total_periodos_bono + 1):
-        if i == total_periodos_bono:
-            flujo = cupon + valor_nominal
-        else:
-            flujo = cupon
-        
-        vp = flujo / ((1 + tasa_descuento_periodica) ** i)
-        valor_presente_total += vp
-        
-        flujos.append({
-            'Periodo': i,
-            'Año': round(i / num_periodos_bono, 2),
-            'Flujo': flujo,
-            'Valor Presente': vp
-        })
-    
-    df_flujos = pd.DataFrame(flujos)
-    
-    # Métricas del bono
+
+    # SECCIÓN 2: VALIDACIONES Y BOTÓN DE CÁLCULO
     st.divider()
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("💎 Valor Presente", formato_moneda(valor_presente_total))
-    
-    with col2:
-        st.metric("📄 Valor Nominal", formato_moneda(valor_nominal))
-    
-    with col3:
-        st.metric("💰 Cupón Periódico", formato_moneda(cupon))
-    
-    with col4:
-        diferencia = valor_presente_total - valor_nominal
-        tipo = "Premium" if diferencia > 0 else "Descuento" if diferencia < 0 else "Par"
-        st.metric("Tipo de Bono", tipo, delta=formato_moneda(diferencia))
-    
-    # Interpretación
-    st.divider()
-    if valor_presente_total > valor_nominal:
-        st.success(f"✅ El bono cotiza con **prima** (sobre par). El VP es {formato_moneda(valor_presente_total - valor_nominal)} mayor que el valor nominal.")
-    elif valor_presente_total < valor_nominal:
-        st.warning(f"⚠️ El bono cotiza con **descuento** (bajo par). El VP es {formato_moneda(valor_nominal - valor_presente_total)} menor que el valor nominal.")
-    else:
-        st.info("ℹ️ El bono cotiza **a la par**. El valor presente es igual al valor nominal.")
-    
-    # Gráfica de flujos
-    st.divider()
-    st.subheader("📊 Análisis de Flujos")
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        x=df_flujos['Año'],
-        y=df_flujos['Flujo'],
-        name='Flujo de Caja',
-        marker_color='#3B82F6'
-    ))
-    
-    fig.add_trace(go.Bar(
-        x=df_flujos['Año'],
-        y=df_flujos['Valor Presente'],
-        name='Valor Presente',
-        marker_color='#10B981'
-    ))
-    
-    fig.update_layout(
-        xaxis_title="Año",
-        yaxis_title="Valor (USD)",
-        barmode='group',
-        height=400,
-        template='plotly_white'
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Tabla de flujos
-    st.divider()
-    st.subheader("📋 Detalle de Flujos")
-    
-    df_mostrar = df_flujos.copy()
-    df_mostrar['Flujo'] = df_mostrar['Flujo'].apply(formato_moneda)
-    df_mostrar['Valor Presente'] = df_mostrar['Valor Presente'].apply(formato_moneda)
-    
-    st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
-    
-    # Resumen final
-    st.divider()
-    with st.container():
-        st.subheader("📌 Resumen del Bono")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write(f"**Valor Nominal:** {formato_moneda(valor_nominal)}")
-            st.write(f"**Tasa Cupón:** {tasa_cupon}% TEA")
-            st.write(f"**Frecuencia:** {frecuencia_bono}")
-            st.write(f"**Cupón por Período:** {formato_moneda(cupon)}")
-        
-        with col2:
-            st.write(f"**Plazo:** {plazo_bono} años ({total_periodos_bono} períodos)")
-            st.write(f"**Tasa de Descuento:** {tea_bono}% TEA")
-            st.write(f"**Total de Flujos:** {formato_moneda(df_flujos['Flujo'].sum())}")
-            st.write(f"**Valor Presente:** {formato_moneda(valor_presente_total)}")
-    
-    # Descarga
-    csv = df_flujos.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Descargar flujos en CSV",
-        data=csv,
-        file_name=f"valoracion_bono_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv"
-    )
+
+    # Botón para calcular
+    col_calc1, col_calc2, col_calc3 = st.columns([1, 2, 1])
+    with col_calc2:
+        calcular_clicked = st.button(
+            "🚀 Calcular Valoración del Bono",
+            type="primary",
+            use_container_width=True
+        )
+
+    # Validaciones
+    errores = []
+    if valor_nominal <= 0:
+        errores.append("⚠️ El valor nominal debe ser mayor a cero.")
+    if tasa_cupon < 0 or tasa_cupon > 50:
+        errores.append("⚠️ La tasa cupón debe estar entre 0% y 50%.")
+    if tea_bono < 0 or tea_bono > 50:
+        errores.append("⚠️ La tasa de retorno esperada debe estar entre 0% y 50%.")
+    if plazo_bono <= 0:
+        errores.append("⚠️ El plazo debe ser mayor a cero.")
+
+    # Mostrar errores si existen
+    if errores:
+        for error in errores:
+            st.error(error)
+
+    # Si no hay errores y se hizo clic en calcular, mostrar resultados
+    elif calcular_clicked:
+        with st.spinner("Calculando valoración del bono..."):
+            # Realizar cálculos
+            resultados = calcular_valoracion_bono(
+                valor_nominal, tasa_cupon, frecuencia_bono, plazo_bono, tea_bono
+            )
+
+            # SECCIÓN 3: MOSTRAR RESULTADOS
+            st.success("✅ Valoración calculada exitosamente!")
+
+            total_periodos = mostrar_resultados_completos(
+                valor_nominal, tasa_cupon, frecuencia_bono, plazo_bono,
+                tea_bono, resultados['df_flujos'], resultados['valor_presente_total'],
+                resultados['cupon'], resultados['tasa_cupon_periodica'],
+                resultados['tasa_descuento_periodica'], resultados['num_periodos_bono']
+            )
+
+            # SECCIÓN 4: COMPARACIÓN DE ESCENARIOS
+            st.divider()
+            st.subheader("🔄 Comparación de Escenarios")
+
+            with st.expander("Comparar con diferentes tasas de descuento", expanded=True):
+                col_comp1, col_comp2 = st.columns(2)
+
+                with col_comp1:
+                    tasa_escenario1 = st.number_input(
+                        "Escenario 1 - Tasa (%)",
+                        min_value=0.0,
+                        max_value=50.0,
+                        value=5.0,
+                        step=0.1
+                    )
+
+                with col_comp2:
+                    tasa_escenario2 = st.number_input(
+                        "Escenario 2 - Tasa (%)",
+                        min_value=0.0,
+                        max_value=50.0,
+                        value=9.0,
+                        step=0.1
+                    )
+
+                # Mostrar comparación
+                comparacion_escenarios(
+                    tasa_escenario1, tasa_escenario2, tea_bono,
+                    valor_nominal, resultados['cupon'], resultados['total_periodos_bono'],
+                    frecuencia_bono, convertir_tea_a_periodica
+                )
+
+                # Gráfico de sensibilidad
+                fig_sens = grafico_sensibilidad(
+                    valor_nominal, resultados['cupon'], resultados['total_periodos_bono'],
+                    frecuencia_bono, tea_bono, convertir_tea_a_periodica
+                )
+                st.plotly_chart(fig_sens, use_container_width=True)
+
+            # SECCIÓN 5: EXPORTACIÓN
+            st.divider()
+            st.subheader("📄 Exportar Resultados")
+
+            col_btn1, col_btn2 = st.columns(2)
+
+            with col_btn1:
+                # Descarga CSV
+                csv = resultados['df_flujos'].to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Descargar flujos en CSV",
+                    data=csv,
+                    file_name=f"valoracion_bono_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with col_btn2:
+                # Descarga PDF
+                try:
+                    pdf_buffer = generar_pdf_bonos(
+                        valor_nominal, tasa_cupon, frecuencia_bono, plazo_bono,
+                        tea_bono, resultados['df_flujos'], resultados['valor_presente_total'],
+                        resultados['cupon'], resultados['tasa_cupon_periodica'],
+                        resultados['tasa_descuento_periodica']
+                    )
+
+                    st.download_button(
+                        label="📄 Descargar reporte en PDF",
+                        data=pdf_buffer,
+                        file_name=f"reporte_bono_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"Error al generar PDF: {str(e)}")
+                    st.info("💡 Asegúrate de tener instalada la librería reportlab: pip install reportlab")
+
+    # Mensaje inicial si no se ha calculado
+    elif not calcular_clicked:
+        st.info(
+            "👆 Completa los parámetros del bono y haz clic en 'Calcular Valoración del Bono' para ver los resultados.")
+
+    # Mostrar errores si hay alguno y no se ha calculado
+    elif errores and not calcular_clicked:
+        st.warning("❌ Corrige los errores en el formulario antes de calcular.")
